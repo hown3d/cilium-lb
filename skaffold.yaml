@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/GoogleContainerTools/skaffold/main/docs-v2/content/en/schemas/v4beta13.json
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: cilium-lbaas
+build:
+  artifacts:
+    - image: ghcr.io/hown3d/cilium-lb/lb-controller
+      context: lb-controller
+      ko: {}
+manifests:
+  kustomize:
+    paths:
+      - deploy/
+  helm:
+    releases:
+      - name: cilium
+        remoteChart: cilium/cilium
+        namespace: kube-system
+        valuesFiles:
+          - helm-values.yaml
+

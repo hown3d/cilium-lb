@@ -1,0 +1,10 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cilium-lbaas
+nodes:
+- role: control-plane
+- role: worker
+networking:
+  podSubnet: "10.244.0.0/16"
+  disableDefaultCNI: true
+  kubeProxyMode: "none"

@@ -1,0 +1,36 @@
+ipam:
+  operator:
+    clusterPoolIPv4PodCIDRList:
+      - 192.168.0.0/16
+ipv4NativeRoutingCIDR: "192.168.0.0/16"
+kubeProxyReplacement: true
+routingMode: native
+autoDirectNodeRoutes: true
+# only expose loadBalancerClass=io.cilium/l2-announcer
+defaultLBServiceIPAM: none
+debug:
+  enabled: true
+l2announcements:
+  enabled: true
+l2NeighDiscovery:
+  enabled: true
+externalIPs:
+  enabled: true
+hubble:
+  relay:
+    enabled: true
+bpf:
+  masquerade: true
+
+
+loadBalancer:
+  algorithm: maglev
+  mode: dsr
+  dsrDispatch: geneve
+tunnelProtocol: geneve
+
+bpf:
+  lbModeAnnotation: true
+
+# nodePort:
+#   directRoutingDevice: enp7s0

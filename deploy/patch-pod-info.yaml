@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: irrelevant
+  labels:
+    cilium.lbaas/network: "a99021f6-8eb3-4c5f-8820-32a9802058ec"
+spec:
+  type: LoadBalancer
+  loadBalancerClass: io.cilium/l2-announcer

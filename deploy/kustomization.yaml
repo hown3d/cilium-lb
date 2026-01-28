@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cilium-lbaas
+resources:
+  - ../lb-controller/deploy
+  - ./pod-info-svc-lbapi.yaml
+  - https://github.com/stackitcloud/cloud-provider-stackit//deploy/cloud-controller-manager?ref=main
+  - https://github.com/stefanprodan/podinfo///kustomize?ref=master
+configMapGenerator:
+  - name: stackit-cloud-config
+    files:
+      - cloud.yaml
+    options:
+      disableNameSuffixHash: true
+
+patches:
+  - path: patch-ccm.yaml
+    target:
+      name: stackit-cloud-controller-manager
+      group: apps
+      kind: Deployment
+  - path: patch-pod-info.yaml
+    target:
+      name: podinfo
+      kind: Service
+    
