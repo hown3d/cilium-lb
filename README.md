@@ -1,24 +1,58 @@
-# Cilium as a LoadBalancer Service
+# Cilium LoadBalancer in STACKIT
 
-## STACKIT
+This project provides a high-performance load balancing solution for Kubernetes workloads using Cilium's eBPF-based networking stack
 
-- Do we support <https://docs.openstack.org/api-ref/network/v2/index.html#ports> `ip-substring-filtering`
+## Quick Start
+
+### Prerequisites
+
+- STACKIT credentials
+- Kubernetes cluster with Cilium installed (version 1.18+)
+- Terraform for infrastructure provisioning
+- Helm for Cilium configuration
+
+### Deploy Infrastructure
 
 ```bash
-helm upgrade --install cilium cilium/cilium --version 1.18.4 \
-   --namespace kube-system \
-   --values helm-values.yaml
+cd deploy/terraform
+terraform init
+terraform apply
 ```
 
-### TODOS
+### Deploy components
 
+```bash
+make up
+kubectl apply -f lbaas.yaml
+```
+
+## Key Components
+
+- **LoadBalancer-controller**: Kubernetes controller for managing STACKIT infrastructure
+- **Cilium**: Cilium is the backbone for the loadbalancer
+
+## Documentation
+
+For detailed technical documentation, see the [docs/](docs/) folder:
+
+- [Architecture](docs/architecture.md) - Architecture of the LoadBalancer service
+
+## Configuration
+
+Key Cilium settings:
+
+- `loadBalancer.mode: dsr` - Direct Server Return mode
+- `loadBalancer.dsrDispatch: geneve` - Geneve encapsulation for DSR
+- `tunnelProtocol: geneve` - Geneve for tunneling traffic
+- `kubeProxyReplacement: true` - eBPF-based kube proxy
+
+## Todos
+
+- [x] cleanup resources on delete
+- [x] Geneve DSR implementation
+- [x] Cleanup resources on delete
+- [x] STACKIT infrastructure integration
+- [ ] Security groups (in progress)
 - [ ] remove lock if node has ToBeDeletedByAutoscaler Taint
   - WIP: <https://github.com/hown3d/cilium/commit/71e93043af34e2fd23732a0088e733b8513eff39>
   - Is Coordinated Leader election possible? <https://github.com/kubernetes/enhancements/blob/master/keps/sig-api-machinery/4355-coordinated-leader-election/README.md>
-- [x] cleanup resources on delete
-
-- [ ] security groups
-  -
-
-- [x] geneve DSR
-  - ~Currently the SYN ACK packet is somewhere lost~ Must use stateless security groups as packets are dropped if no SYN was first sent
