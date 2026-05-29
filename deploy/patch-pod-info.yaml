@@ -3,7 +3,7 @@ kind: Service
 metadata:
   name: irrelevant
   labels:
-    cilium.lbaas/network: "2cfdfdf1-7c5e-4e2e-adc6-79f4b413ceee"
+    cilium.lbaas/network: "832b848d-8673-4f78-a404-2f8d4c93eace"
 spec:
   type: LoadBalancer
   loadBalancerClass: cilium.stackit.cloud
