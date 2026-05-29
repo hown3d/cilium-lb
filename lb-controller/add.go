@@ -47,6 +47,7 @@ func (r *reconciler) AddToManager(mgr manager.Manager) error {
 			MaxConcurrentReconciles: 1,
 		}).
 		For(&corev1.Service{}, builder.WithPredicates(servicePredicate())).
+		Owns(&corev1.Service{}, builder.WithPredicates(servicePredicateIngressChanged())).
 		WatchesRawSource(source.TypedKind(
 			mgr.GetCache(),
 			&corev1.Node{},
@@ -103,13 +104,10 @@ func (r *reconciler) nodePredicate() predicate.TypedPredicate[*corev1.Node] {
 
 func servicePredicate() predicate.Funcs {
 	checkService := func(svc *corev1.Service) bool {
-		if ptr.Deref(svc.Spec.LoadBalancerClass, "") != "io.cilium/l2-announcer" {
+		if ptr.Deref(svc.Spec.LoadBalancerClass, "") != LoadBalancerClass {
 			return false
 		}
 		if _, ok := svc.Labels["cilium.lbaas/network"]; !ok {
-			return false
-		}
-		if len(svc.Status.LoadBalancer.Ingress) == 0 {
 			return false
 		}
 		return true
@@ -117,18 +115,9 @@ func servicePredicate() predicate.Funcs {
 
 	return predicate.Funcs{
 		UpdateFunc: func(e event.TypedUpdateEvent[client.Object]) bool {
-			oldSvc := e.ObjectOld.(*corev1.Service)
 			newSvc := e.ObjectNew.(*corev1.Service)
 			if !checkService(newSvc) {
 				return false
-			}
-			if !equality.Semantic.DeepEqual(oldSvc.Status.LoadBalancer.Ingress, newSvc.Status.LoadBalancer.Ingress) {
-				logf.Log.V(1).Info("load balancer ingresses are different, enqueing",
-					"oldSvc", client.ObjectKeyFromObject(oldSvc),
-					"newSvc", client.ObjectKeyFromObject(newSvc),
-					"oldIngress", oldSvc.Status.LoadBalancer.Ingress,
-					"newIngress", newSvc.Status.LoadBalancer.Ingress)
-				return true
 			}
 			if newSvc.DeletionTimestamp != nil {
 				return true
@@ -143,6 +132,33 @@ func servicePredicate() predicate.Funcs {
 		},
 		CreateFunc: func(e event.TypedCreateEvent[client.Object]) bool {
 			return checkService(e.Object.(*corev1.Service))
+		},
+	}
+}
+
+func servicePredicateIngressChanged() predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.TypedUpdateEvent[client.Object]) bool {
+			oldSvc := e.ObjectOld.(*corev1.Service)
+			newSvc := e.ObjectNew.(*corev1.Service)
+			if !equality.Semantic.DeepEqual(oldSvc.Status.LoadBalancer.Ingress, newSvc.Status.LoadBalancer.Ingress) {
+				logf.Log.V(1).Info("load balancer ingresses are different, enqueing",
+					"oldSvc", client.ObjectKeyFromObject(oldSvc),
+					"newSvc", client.ObjectKeyFromObject(newSvc),
+					"oldIngress", oldSvc.Status.LoadBalancer.Ingress,
+					"newIngress", newSvc.Status.LoadBalancer.Ingress)
+				return true
+			}
+			return false
+		},
+		GenericFunc: func(event.TypedGenericEvent[client.Object]) bool {
+			return false
+		},
+		DeleteFunc: func(event.TypedDeleteEvent[client.Object]) bool {
+			return false
+		},
+		CreateFunc: func(e event.TypedCreateEvent[client.Object]) bool {
+			return false
 		},
 	}
 }

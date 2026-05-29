@@ -18,6 +18,7 @@ import (
 
 func (r *reconciler) delete(ctx context.Context, svc *corev1.Service, network string) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
+
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.IP == "" {
 			continue
@@ -29,13 +30,13 @@ func (r *reconciler) delete(ctx context.Context, svc *corev1.Service, network st
 			continue
 		}
 
-		exists, err := isPublicIPOfIPPool(ctx, r.c, svc, addr)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if exists {
-			continue
-		}
+		// exists, err := isPublicIPOfIPPool(ctx, r.c, svc, addr)
+		// if err != nil {
+		// 	return reconcile.Result{}, err
+		// }
+		// if exists {
+		// 	continue
+		// }
 
 		log.V(1).Info("deleting port")
 		if err := r.deletePort(ctx, svc, network); err != nil {
@@ -53,9 +54,9 @@ func (r *reconciler) delete(ctx context.Context, svc *corev1.Service, network st
 		}
 	}
 
-	if err := r.c.Delete(ctx, publicIPPoolForSvc(svc)); err != nil {
-		return reconcile.Result{}, fmt.Errorf("deleting cilium IP pool with publicIP: %w", err)
-	}
+	// if err := r.c.Delete(ctx, publicIPPoolForSvc(svc)); err != nil {
+	// 	return reconcile.Result{}, fmt.Errorf("deleting cilium IP pool with publicIP: %w", err)
+	// }
 
 	return reconcile.Result{}, r.dropFinalizer(ctx, svc)
 }

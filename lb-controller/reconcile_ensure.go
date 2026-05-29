@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"slices"
 
@@ -26,10 +27,15 @@ import (
 
 func (r *reconciler) ensure(ctx context.Context, svc *corev1.Service, network string) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
-	before := svc.DeepCopy()
 
-	log.V(1).Info("checking loadbalancer ingresses", "ingresses", svc.Status.LoadBalancer.Ingress)
-	for _, ing := range svc.Status.LoadBalancer.Ingress {
+	internalSvc, err := r.createOrUpdateInternalService(ctx, svc)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("creating internal loadbalancer service: %w", err)
+	}
+
+	ingressMap := map[netip.Addr]corev1.LoadBalancerIngress{}
+	log.V(1).Info("checking loadbalancer ingresses", "ingresses", internalSvc.Status.LoadBalancer.Ingress)
+	for _, ing := range internalSvc.Status.LoadBalancer.Ingress {
 		if ing.IP == "" {
 			continue
 		}
@@ -41,13 +47,13 @@ func (r *reconciler) ensure(ctx context.Context, svc *corev1.Service, network st
 		}
 		log := log.WithValues("ip", addr)
 
-		exists, err := isPublicIPOfIPPool(ctx, r.c, svc, addr)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if exists {
-			continue
-		}
+		// exists, err := isPublicIPOfIPPool(ctx, r.c, svc, addr)
+		// if err != nil {
+		// 	return reconcile.Result{}, err
+		// }
+		// if exists {
+		// 	continue
+		// }
 
 		log.V(1).Info("ensuring port")
 		nicID, err := r.ensurePort(ctx, svc, network, addr)
@@ -66,24 +72,28 @@ func (r *reconciler) ensure(ctx context.Context, svc *corev1.Service, network st
 			return reconcile.Result{}, err
 		}
 
-		if err := r.persistPublicIPInLBPool(ctx, svc, pubIP); err != nil {
-			return reconcile.Result{}, fmt.Errorf("persisting public ip in pool: %w", err)
-		}
+		// if err := r.persistPublicIPInLBPool(ctx, svc, pubIP); err != nil {
+		// 	return reconcile.Result{}, fmt.Errorf("persisting public ip in pool: %w", err)
+		// }
 
 		lbIngress := corev1.LoadBalancerIngress{
 			IP:     pubIP.String(),
 			IPMode: ing.IPMode,
 			Ports:  ing.Ports,
 		}
-		idx := slices.IndexFunc(svc.Status.LoadBalancer.Ingress, func(ingress corev1.LoadBalancerIngress) bool {
-			return ingress.IP == pubIP.String()
-		})
-		if idx == -1 {
-			svc.Status.LoadBalancer.Ingress = append([]corev1.LoadBalancerIngress{lbIngress}, svc.Status.LoadBalancer.Ingress...)
-		} else {
-			svc.Status.LoadBalancer.Ingress[idx] = lbIngress
-		}
+		ingressMap[pubIP] = lbIngress
+		// idx := slices.IndexFunc(svc.Status.LoadBalancer.Ingress, func(ingress corev1.LoadBalancerIngress) bool {
+		// 	return ingress.IP == pubIP.String()
+		// })
+		// if idx == -1 {
+		// 	svc.Status.LoadBalancer.Ingress = append([]corev1.LoadBalancerIngress{lbIngress}, svc.Status.LoadBalancer.Ingress...)
+		// } else {
+		// 	svc.Status.LoadBalancer.Ingress[idx] = lbIngress
+		// }
 	}
+
+	before := svc.DeepCopy()
+	svc.Status.LoadBalancer.Ingress = slices.Collect(maps.Values(ingressMap))
 	if !equality.Semantic.DeepEqual(before.Status.LoadBalancer.Ingress, svc.Status.LoadBalancer.Ingress) {
 		log.V(1).Info("loadbalancer ingress unequal, patching")
 		if err := r.c.Status().Patch(ctx, svc, client.MergeFrom(before)); err != nil {
@@ -329,4 +339,37 @@ func (r *reconciler) ensureFinalizer(ctx context.Context, svc *corev1.Service) e
 		return r.c.Patch(ctx, svc, client.MergeFrom(before))
 	}
 	return nil
+}
+
+func (r *reconciler) createOrUpdateInternalService(ctx context.Context, externalSvc *corev1.Service) (*corev1.Service, error) {
+	internalSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      externalSvc.Name + "-int",
+			Namespace: externalSvc.Namespace,
+		},
+	}
+	res, err := controllerutil.CreateOrUpdate(ctx, r.c, internalSvc, func() error {
+		if err := controllerutil.SetOwnerReference(externalSvc, internalSvc, r.c.Scheme()); err != nil {
+			return err
+		}
+		internalSvc.Annotations = externalSvc.Annotations
+		internalSvc.Labels = externalSvc.Labels
+		internalSvc.Spec = externalSvc.Spec
+		internalSvc.Spec.ClusterIP = ""
+		internalSvc.Spec.ClusterIPs = nil
+		internalSvc.Spec.LoadBalancerClass = ptr.To(cilium_api_v2alpha1.L2AnnounceLoadBalancerClass)
+
+		// drop node ports
+		for i := range internalSvc.Spec.Ports {
+			internalSvc.Spec.Ports[i].NodePort = 0
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res != controllerutil.OperationResultNone {
+		logf.FromContext(ctx).Info("internal service mutation", "operation", res)
+	}
+	return internalSvc, nil
 }

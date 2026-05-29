@@ -30,7 +30,7 @@ spec:
       volumes:
         - name: stackit-creds
           secret:
-            secretName: stackit-creds
+            secretName: stackit-cloud-secret
             items:
               - key: serviceaccount.json
                 path: serviceaccount.json
@@ -38,16 +38,11 @@ spec:
       - name: lb-controller
         image: ghcr.io/hown3d/cilium-lb/lb-controller
         args:
-          - --project-id=$(PROJECT_ID)
+          - --project-id=f5debc67-cfeb-403a-9d92-36fdbe3325c7
         imagePullPolicy: IfNotPresent
         env:
           - name: STACKIT_SERVICE_ACCOUNT_KEY_PATH
             value: /.stackit/serviceaccount.json
-          - name: PROJECT_ID
-            valueFrom:
-              secretKeyRef:
-                key: project-id
-                name: stackit
         volumeMounts:
           - mountPath: /.stackit
             name: stackit-creds
