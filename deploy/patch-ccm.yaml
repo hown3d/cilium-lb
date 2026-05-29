@@ -11,23 +11,8 @@ spec:
           value: "true"
       containers:
       - name: stackit-cloud-controller-manager
-        args:
-        - --cloud-provider=stackit
-        - --webhook-secure-port=0
-        - --concurrent-service-syncs=3
-        # - --controllers=cloud-node-controller
-        - --authorization-always-allow-paths=/metrics
-        - --leader-elect=true
-        - --leader-elect-resource-name=stackit-cloud-controller-manager
-        - --cloud-config=/etc/config/cloud.yaml
-        - --cluster-name=$(CLUSTER_NAME)
         env:
         - name: STACKIT_SERVICE_ACCOUNT_KEY_PATH
           value: /etc/serviceaccount/serviceaccount.json
-        image: ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager:v1.34.3
-      volumes:
-      - name: cloud-secret
-        secret:
-          secretName: stackit-creds
 
 

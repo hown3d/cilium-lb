@@ -32,5 +32,5 @@ tunnelProtocol: geneve
 bpf:
   lbModeAnnotation: true
 
-# nodePort:
-#   directRoutingDevice: enp7s0
+nodePort:
+  directRoutingDevice: enp7s0

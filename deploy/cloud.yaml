@@ -2,5 +2,5 @@ global:
   projectId: f5debc67-cfeb-403a-9d92-36fdbe3325c7
   region: eu01
 loadBalancer:
-  networkId: ce12f9c8-15c2-4c48-9dde-0734ab84b59e
+  networkId: dummy
 
