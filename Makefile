@@ -4,3 +4,6 @@ up: export SKAFFOLD_LABEL = skaffold.dev/run-id=cilium-lb
 up:
 	skaffold run --tail --cleanup=false
 
+up-controller:
+	skaffold run -m lb-controller --tail --cleanup=false
+
