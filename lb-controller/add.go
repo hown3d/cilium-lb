@@ -40,18 +40,31 @@ func (r *reconciler) AddToManager(mgr manager.Manager) error {
 		r.iaasClient = iaasClient
 	}
 
+	svcPredicate := servicePredicate(
+		predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.AnnotationChangedPredicate{},
+			predicate.LabelChangedPredicate{},
+		),
+	)
 	return builder.
 		ControllerManagedBy(mgr).
 		Named("ports").
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 1,
 		}).
-		For(&corev1.Service{}, builder.WithPredicates(servicePredicate())).
+		For(&corev1.Service{}, builder.WithPredicates(svcPredicate)).
 		Owns(&corev1.Service{}, builder.WithPredicates(servicePredicateIngressChanged())).
 		WatchesRawSource(source.TypedKind(
 			mgr.GetCache(),
 			&corev1.Node{},
-			handler.TypedEnqueueRequestsFromMapFunc(r.nodeMapFunc()),
+			handler.TypedEnqueueRequestsFromMapFunc(
+				r.nodeMapFunc(func(svc *corev1.Service) bool {
+					return svcPredicate.CreateFunc(event.TypedCreateEvent[client.Object]{
+						Object: svc,
+					})
+				}),
+			),
 			r.nodePredicate(),
 		)).
 		Complete(r)
@@ -102,7 +115,7 @@ func (r *reconciler) nodePredicate() predicate.TypedPredicate[*corev1.Node] {
 	}
 }
 
-func servicePredicate() predicate.Funcs {
+func servicePredicate(subPrediacte predicate.Predicate) predicate.Funcs {
 	checkService := func(svc *corev1.Service) bool {
 		if ptr.Deref(svc.Spec.LoadBalancerClass, "") != LoadBalancerClass {
 			return false
@@ -119,10 +132,7 @@ func servicePredicate() predicate.Funcs {
 			if !checkService(newSvc) {
 				return false
 			}
-			if newSvc.DeletionTimestamp != nil {
-				return true
-			}
-			return false
+			return subPrediacte.Update(e)
 		},
 		GenericFunc: func(event.TypedGenericEvent[client.Object]) bool {
 			return false
@@ -163,7 +173,7 @@ func servicePredicateIngressChanged() predicate.Funcs {
 	}
 }
 
-func (r *reconciler) nodeMapFunc() handler.TypedMapFunc[*corev1.Node, reconcile.Request] {
+func (r *reconciler) nodeMapFunc(shouldEnqueueServiceFunc func(svc *corev1.Service) bool) handler.TypedMapFunc[*corev1.Node, reconcile.Request] {
 	return func(ctx context.Context, n *corev1.Node) []reconcile.Request {
 		log := logf.FromContext(ctx)
 		svcList := &corev1.ServiceList{}
@@ -186,7 +196,7 @@ func (r *reconciler) nodeMapFunc() handler.TypedMapFunc[*corev1.Node, reconcile.
 
 		requests := make([]reconcile.Request, 0, len(svcList.Items))
 		for _, svc := range svcList.Items {
-			if servicePredicate().CreateFunc(event.TypedCreateEvent[client.Object]{Object: &svc}) {
+			if shouldEnqueueServiceFunc(&svc) {
 				requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
 			}
 		}
