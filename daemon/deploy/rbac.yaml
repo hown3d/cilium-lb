@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lb-daemon
+  namespace: cilium-lbaas
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lb-daemon
+rules:
+- apiGroups:
+  - "cilium.io"
+  resources:
+  - ciliumloadbalancerippools
+  verbs:
+  - list
+  - watch
+  - get
+- apiGroups:
+  - "cilium.io"
+  resources:
+  - ciliuml2announcementpolicies
+  verbs:
+  - list
+  - watch
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lb-daemon
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lb-daemon
+subjects:
+- kind: ServiceAccount
+  name: lb-daemon
+  namespace: cilium-lbaas
+---
+

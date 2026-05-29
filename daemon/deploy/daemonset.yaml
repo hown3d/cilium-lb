@@ -1,0 +1,35 @@
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: lb-daemon
+  namespace: cilium-lbaas
+  labels:
+    app: lb-daemon
+spec:
+  selector:
+    matchLabels:
+      app: lb-daemon
+  template:
+    metadata:
+      labels:
+        app: lb-daemon
+    spec:
+      hostNetwork: true
+      serviceAccountName: lb-daemon
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      containers:
+      - name: daemon
+        image: ghcr.io/hown3d/cilium-lb/lb-daemon
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          capabilities:
+            add:
+              - NET_ADMIN
+              - SYS_ADMIN
+          runAsNonRoot: false
+          runAsGroup: 0
+          runAsUser: 0
+---
