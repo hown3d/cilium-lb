@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/hown3d/cilium-lb/pkg/l2policy"
 	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -74,7 +75,7 @@ func (r *reconciler) nodePredicate() predicate.TypedPredicate[*corev1.Node] {
 	checkNode := func(node *corev1.Node) bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		selector, err := r.l2AnnouncementNodeSelector(ctx)
+		selector, err := l2policy.NodeSelector(ctx, r.c)
 		if err != nil {
 			logf.Log.Error(err, "finding l2 announcement nodes")
 			return false

@@ -10,12 +10,12 @@ import (
 	cilium_api_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	cilium_api_v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
+	"github.com/hown3d/cilium-lb/pkg/l2policy"
 	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -170,40 +170,8 @@ func (r *reconciler) ensureAllowedAddressOnNode(ctx context.Context, node *corev
 	return nil
 }
 
-const l2announcementPolicyName = "loadbalancer"
-
-func (r *reconciler) l2AnnouncementNodeSelector(ctx context.Context) (labels.Selector, error) {
-	l2announcementPolicy := &cilium_api_v2alpha1.CiliumL2AnnouncementPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			// TODO: find a good way to determine which l2announcement policies to use.
-			// Probably best to use a list and check also if there are service selectors present.
-			// For now, we can just go hardcoded
-			Name: l2announcementPolicyName,
-		},
-	}
-	if err := r.c.Get(ctx, client.ObjectKeyFromObject(l2announcementPolicy), l2announcementPolicy); err != nil {
-		return nil, err
-	}
-
-	var (
-		selector labels.Selector
-		err      error
-	)
-	labelSelector := slimSelectorToMetaSelector(l2announcementPolicy.Spec.NodeSelector)
-	// In cilium l2 announcements, no selector means all nodes
-	if labelSelector == nil {
-		selector = labels.Everything()
-	} else {
-		selector, err = metav1.LabelSelectorAsSelector(labelSelector)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return selector, nil
-}
-
 func (r *reconciler) l2AnnouncementNodes(ctx context.Context) ([]corev1.Node, error) {
-	selector, err := r.l2AnnouncementNodeSelector(ctx)
+	selector, err := l2policy.NodeSelector(ctx, r.c)
 	if err != nil {
 		return nil, err
 	}
