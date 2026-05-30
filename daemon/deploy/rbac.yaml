@@ -10,9 +10,9 @@ metadata:
   name: lb-daemon
 rules:
 - apiGroups:
-  - "cilium.io"
+  - ""
   resources:
-  - ciliumloadbalancerippools
+  - services
   verbs:
   - list
   - watch

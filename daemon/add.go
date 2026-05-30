@@ -10,8 +10,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	cilium_api_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	cilium_api_v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func (r *ruleReconciler) AddToManager(mgr manager.Manager) error {
@@ -19,14 +19,27 @@ func (r *ruleReconciler) AddToManager(mgr manager.Manager) error {
 		r.c = mgr.GetClient()
 	}
 
+	// if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Service{}, "spec.loadBalancerClass", func(obj client.Object) []string {
+	// 	svc, ok := obj.(*corev1.Service)
+	// 	if !ok {
+	// 		return []string{}
+	// 	}
+	// 	if svc.Spec.LoadBalancerClass == nil {
+	// 		return []string{}
+	// 	}
+	// 	return []string{*svc.Spec.LoadBalancerClass}
+	// }); err != nil {
+	// 	return fmt.Errorf("adding loadBalancerClass indexer: %w", err)
+	// }
+
 	return builder.
 		ControllerManagedBy(mgr).
 		Named("rule").
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 1,
 		}).
-		// TODO: predicate to match only for our services
-		For(&cilium_api_v2.CiliumLoadBalancerIPPool{}).
+		// TODO: predicate to match only for our services and if ingress changes
+		For(&corev1.Service{}).
 		Complete(r)
 }
 
