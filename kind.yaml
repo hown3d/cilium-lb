@@ -5,6 +5,6 @@ nodes:
 - role: control-plane
 - role: worker
 networking:
-  podSubnet: "10.244.0.0/16"
+  podSubnet: "192.168.0.0/16"
   disableDefaultCNI: true
   kubeProxyMode: "none"

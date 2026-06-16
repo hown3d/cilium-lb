@@ -1,11 +1,10 @@
 package main
 
 import (
-	"errors"
+	"flag"
 	"fmt"
 	"os"
 
-	flag "github.com/spf13/pflag"
 	runtimeutil "k8s.io/apimachinery/pkg/util/runtime"
 	clientsetscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -19,15 +18,13 @@ import (
 )
 
 var (
-	projectID   string
-	networkID   string
-	clusterName string
+	projectID string
+	networkID string
 )
 
 func init() {
-	flag.StringVar(&networkID, "network-id", "", "STACKIT network id of loadbalancer NIC")
 	flag.StringVar(&projectID, "project-id", "", "STACKIT project id")
-	flag.StringVar(&clusterName, "cluster-name", "kubernetes", "Kubernetes cluster name")
+	flag.StringVar(&networkID, "network-id", "", "STACKIT network id of loadbalancer NIC")
 }
 
 func main() {
@@ -39,9 +36,6 @@ func main() {
 }
 
 func run() error {
-	if projectID == "" {
-		return errors.New("project id cannot be empty")
-	}
 	logf.SetLogger(zap.New(zap.UseDevMode(true)))
 	restCfg := config.GetConfigOrDie()
 	scheme := clientsetscheme.Scheme
@@ -54,10 +48,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := (&reconciler{
-		projectID:   projectID,
-		networkID:   networkID,
-		clusterName: clusterName,
+
+	if err := (&ruleReconciler{}).AddToManager(mgr); err != nil {
+		return err
+	}
+	if err := (&routeReconciler{
+		NetworkID: networkID,
+		ProjectID: projectID,
+		Region:    "eu01",
 	}).AddToManager(mgr); err != nil {
 		return err
 	}

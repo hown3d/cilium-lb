@@ -33,7 +33,7 @@ resource "stackit_server" "nodes" {
   availability_zone = "eu01-${count.index + 1}"
 
   boot_volume = {
-    size        = 10
+    size        = 50
     source_type = "image"
     source_id   = local.image
   }
@@ -293,9 +293,11 @@ resource "stackit_network" "this" {
 }
 
 resource "stackit_network" "loadbalancer" {
-  project_id  = local.project_id
-  name        = "cilium-lb-loadbalancer"
-  ipv4_prefix = "172.16.0.0/25"
+  project_id      = local.project_id
+  name            = "cilium-lb-north-south"
+  ipv4_prefix     = "172.16.0.0/25"
+  no_ipv4_gateway = false
+  routed          = true
 }
 
 output "nics" {
@@ -311,4 +313,8 @@ output "jumphost_ip" {
 
 output "lb_pub_ip" {
   value = stackit_public_ip.ssh_lb[*].ip
+}
+
+output "lb_network" {
+  value = stackit_network.loadbalancer.network_id
 }

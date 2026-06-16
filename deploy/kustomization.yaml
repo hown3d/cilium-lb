@@ -4,7 +4,6 @@ kind: Kustomization
 namespace: cilium-lbaas
 resources:
   - ../lb-controller/deploy
-  - ./pod-info-svc-lbapi.yaml
   - https://github.com/stackitcloud/cloud-provider-stackit//deploy/cloud-controller-manager?ref=main
   - https://github.com/stefanprodan/podinfo///kustomize?ref=master
 configMapGenerator:
@@ -13,13 +12,24 @@ configMapGenerator:
       - cloud.yaml
     options:
       disableNameSuffixHash: true
-
+images:
+  - name: ghcr.io/stackitcloud/cloud-provider-stackit/cloud-controller-manager
+    newTag: v1.36.0
 patches:
   - path: patch-ccm.yaml
     target:
       name: stackit-cloud-controller-manager
       group: apps
       kind: Deployment
+  - target:
+      name: stackit-cloud-controller-manager
+      group: apps
+      kind: Deployment
+    # only run node controller not lb
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/args/3
+        value: "--controllers=cloud-node-controller"
   - path: patch-pod-info.yaml
     target:
       name: podinfo

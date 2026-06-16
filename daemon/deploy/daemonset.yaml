@@ -1,0 +1,50 @@
+# https://kubernetes.io/docs/concepts/workloads/controllers/deployment/
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: lb-daemon
+  namespace: cilium-lbaas
+  labels:
+    app: lb-daemon
+spec:
+  selector:
+    matchLabels:
+      app: lb-daemon
+  template:
+    metadata:
+      labels:
+        app: lb-daemon
+    spec:
+      hostNetwork: true
+      serviceAccountName: lb-daemon
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          effect: NoSchedule
+      containers:
+      - name: daemon
+        image: ghcr.io/hown3d/cilium-lb/lb-daemon
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: STACKIT_SERVICE_ACCOUNT_KEY_PATH
+            value: /.stackit/serviceaccount.json
+        volumeMounts:
+          - mountPath: /.stackit
+            name: stackit-creds
+        args:
+          - --project-id=f5debc67-cfeb-403a-9d92-36fdbe3325c7
+          - --network-id=832b848d-8673-4f78-a404-2f8d4c93eace
+        securityContext:
+          capabilities:
+            add:
+              - NET_ADMIN
+              - SYS_ADMIN
+          runAsNonRoot: false
+          runAsGroup: 0
+          runAsUser: 0
+      volumes:
+        - name: stackit-creds
+          secret:
+            secretName: stackit-cloud-secret
+            items:
+              - key: serviceaccount.json
+                path: serviceaccount.json

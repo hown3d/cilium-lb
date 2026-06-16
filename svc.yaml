@@ -26,38 +26,10 @@ spec:
           effect: NoSchedule
       containers:
       - name: test-pods
-        image: caddy:alpine
+        image: traefik/whoami:latest
         ports:
         - containerPort: 80
           name: http
-        volumeMounts:
-          - mountPath: /etc/caddy
-            name: caddy
-      volumes:
-        - name: caddy
-          configMap:
-            name: caddy
----
-# https://kubernetes.io/docs/concepts/configuration/configmap/
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: caddy
-  namespace: default
-data:
-  Caddyfile: |-
-    :80 {
-        # Set this path to your site's directory.
-        root * /usr/share/caddy
-
-        # Enable the static file server.
-        file_server
-
-        log {
-          format console
-          output stdout
-        }
-    }
 ---
 # https://kubernetes.io/docs/concepts/services-networking/service/
 apiVersion: v1
@@ -66,13 +38,14 @@ metadata:
   name: test-pods
   namespace: default
   labels:
-    cilium.lbaas/network: "a99021f6-8eb3-4c5f-8820-32a9802058ec"
+    service.cilium.io/forwarding-mode: snat
 spec:
   type: LoadBalancer
-  loadBalancerClass: io.cilium/l2-announcer
+  loadBalancerClass: cilium.stackit.cloud
   ports:
   - name: http
     protocol: TCP
+    targetPort: http
     port: 80
   selector:
     app: test-pods

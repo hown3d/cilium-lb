@@ -6,6 +6,10 @@ metadata:
 spec:
   blocks:
   - cidr: "172.16.0.96/27"
+  serviceSelector:
+    matchExpressions:
+      - key: cilium.stackit.cloud/internal
+        operator: Exists
 ---
 # yaml-language-server: $schema=https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/cilium.io/ciliuml2announcementpolicy_v2alpha1.json
 apiVersion: "cilium.io/v2alpha1"
@@ -18,7 +22,7 @@ spec:
     - enp7s0
   serviceSelector:
     matchExpressions:
-      - key: cilium.lbaas/network
+      - key: cilium.stackit.cloud/internal
         operator: Exists
   loadBalancerIPs: true
 

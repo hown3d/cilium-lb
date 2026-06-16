@@ -3,11 +3,6 @@ apiVersion: skaffold/v4beta13
 kind: Config
 metadata:
   name: cilium-lbaas
-build:
-  artifacts:
-    - image: ghcr.io/hown3d/cilium-lb/lb-controller
-      context: lb-controller
-      ko: {}
 manifests:
   kustomize:
     paths:
@@ -19,4 +14,25 @@ manifests:
         namespace: kube-system
         valuesFiles:
           - helm-values.yaml
-
+deploy:
+  kubectl: {}
+---
+apiVersion: skaffold/v4beta13
+kind: Config
+metadata:
+  name: lb-controller
+build:
+  artifacts:
+    - image: ghcr.io/hown3d/cilium-lb/lb-controller
+      context: lb-controller
+      ko: {}
+    - image: ghcr.io/hown3d/cilium-lb/lb-daemon
+      context: daemon
+      ko: {}
+manifests:
+  kustomize:
+    paths:
+      - lb-controller/deploy
+      - daemon/deploy
+deploy:
+  kubectl: {}

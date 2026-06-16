@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/hown3d/cilium-lb/pkg/l2policy"
 	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -40,17 +41,31 @@ func (r *reconciler) AddToManager(mgr manager.Manager) error {
 		r.iaasClient = iaasClient
 	}
 
+	svcPredicate := servicePredicate(
+		predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			predicate.AnnotationChangedPredicate{},
+			predicate.LabelChangedPredicate{},
+		),
+	)
 	return builder.
 		ControllerManagedBy(mgr).
 		Named("ports").
 		WithOptions(controller.Options{
 			MaxConcurrentReconciles: 1,
 		}).
-		For(&corev1.Service{}, builder.WithPredicates(servicePredicate())).
+		For(&corev1.Service{}, builder.WithPredicates(svcPredicate)).
+		Owns(&corev1.Service{}, builder.WithPredicates(servicePredicateIngressChanged())).
 		WatchesRawSource(source.TypedKind(
 			mgr.GetCache(),
 			&corev1.Node{},
-			handler.TypedEnqueueRequestsFromMapFunc(r.nodeMapFunc()),
+			handler.TypedEnqueueRequestsFromMapFunc(
+				r.nodeMapFunc(func(svc *corev1.Service) bool {
+					return svcPredicate.CreateFunc(event.TypedCreateEvent[client.Object]{
+						Object: svc,
+					})
+				}),
+			),
 			r.nodePredicate(),
 		)).
 		Complete(r)
@@ -60,7 +75,7 @@ func (r *reconciler) nodePredicate() predicate.TypedPredicate[*corev1.Node] {
 	checkNode := func(node *corev1.Node) bool {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		selector, err := r.l2AnnouncementNodeSelector(ctx)
+		selector, err := l2policy.NodeSelector(ctx, r.c)
 		if err != nil {
 			logf.Log.Error(err, "finding l2 announcement nodes")
 			return false
@@ -101,39 +116,18 @@ func (r *reconciler) nodePredicate() predicate.TypedPredicate[*corev1.Node] {
 	}
 }
 
-func servicePredicate() predicate.Funcs {
+func servicePredicate(subPrediacte predicate.Predicate) predicate.Funcs {
 	checkService := func(svc *corev1.Service) bool {
-		if ptr.Deref(svc.Spec.LoadBalancerClass, "") != "io.cilium/l2-announcer" {
-			return false
-		}
-		if _, ok := svc.Labels["cilium.lbaas/network"]; !ok {
-			return false
-		}
-		if len(svc.Status.LoadBalancer.Ingress) == 0 {
-			return false
-		}
-		return true
+		return ptr.Deref(svc.Spec.LoadBalancerClass, "") == LoadBalancerClass
 	}
 
 	return predicate.Funcs{
 		UpdateFunc: func(e event.TypedUpdateEvent[client.Object]) bool {
-			oldSvc := e.ObjectOld.(*corev1.Service)
 			newSvc := e.ObjectNew.(*corev1.Service)
 			if !checkService(newSvc) {
 				return false
 			}
-			if !equality.Semantic.DeepEqual(oldSvc.Status.LoadBalancer.Ingress, newSvc.Status.LoadBalancer.Ingress) {
-				logf.Log.V(1).Info("load balancer ingresses are different, enqueing",
-					"oldSvc", client.ObjectKeyFromObject(oldSvc),
-					"newSvc", client.ObjectKeyFromObject(newSvc),
-					"oldIngress", oldSvc.Status.LoadBalancer.Ingress,
-					"newIngress", newSvc.Status.LoadBalancer.Ingress)
-				return true
-			}
-			if newSvc.DeletionTimestamp != nil {
-				return true
-			}
-			return false
+			return subPrediacte.Update(e)
 		},
 		GenericFunc: func(event.TypedGenericEvent[client.Object]) bool {
 			return false
@@ -147,14 +141,41 @@ func servicePredicate() predicate.Funcs {
 	}
 }
 
-func (r *reconciler) nodeMapFunc() handler.TypedMapFunc[*corev1.Node, reconcile.Request] {
+func servicePredicateIngressChanged() predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.TypedUpdateEvent[client.Object]) bool {
+			oldSvc := e.ObjectOld.(*corev1.Service)
+			newSvc := e.ObjectNew.(*corev1.Service)
+			if !equality.Semantic.DeepEqual(oldSvc.Status.LoadBalancer.Ingress, newSvc.Status.LoadBalancer.Ingress) {
+				logf.Log.V(1).Info("load balancer ingresses are different, enqueing",
+					"oldSvc", client.ObjectKeyFromObject(oldSvc),
+					"newSvc", client.ObjectKeyFromObject(newSvc),
+					"oldIngress", oldSvc.Status.LoadBalancer.Ingress,
+					"newIngress", newSvc.Status.LoadBalancer.Ingress)
+				return true
+			}
+			return false
+		},
+		GenericFunc: func(event.TypedGenericEvent[client.Object]) bool {
+			return false
+		},
+		DeleteFunc: func(event.TypedDeleteEvent[client.Object]) bool {
+			return false
+		},
+		CreateFunc: func(e event.TypedCreateEvent[client.Object]) bool {
+			return false
+		},
+	}
+}
+
+func (r *reconciler) nodeMapFunc(shouldEnqueueServiceFunc func(svc *corev1.Service) bool) handler.TypedMapFunc[*corev1.Node, reconcile.Request] {
 	return func(ctx context.Context, n *corev1.Node) []reconcile.Request {
 		log := logf.FromContext(ctx)
 		svcList := &corev1.ServiceList{}
 		selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
 			MatchExpressions: []metav1.LabelSelectorRequirement{
 				{
-					Key:      "cilium.lbaas/network",
+					Key:      InternalServiceLabel,
 					Operator: metav1.LabelSelectorOpExists,
 				},
 			},
@@ -170,7 +191,7 @@ func (r *reconciler) nodeMapFunc() handler.TypedMapFunc[*corev1.Node, reconcile.
 
 		requests := make([]reconcile.Request, 0, len(svcList.Items))
 		for _, svc := range svcList.Items {
-			if servicePredicate().CreateFunc(event.TypedCreateEvent[client.Object]{Object: &svc}) {
+			if shouldEnqueueServiceFunc(&svc) {
 				requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&svc)})
 			}
 		}
