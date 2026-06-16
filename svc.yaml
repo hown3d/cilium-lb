@@ -38,7 +38,6 @@ metadata:
   name: test-pods
   namespace: default
   labels:
-    cilium.lbaas/network: "832b848d-8673-4f78-a404-2f8d4c93eace"
     service.cilium.io/forwarding-mode: snat
 spec:
   type: LoadBalancer
