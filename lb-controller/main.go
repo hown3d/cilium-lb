@@ -20,10 +20,12 @@ import (
 
 var (
 	projectID   string
+	networkID   string
 	clusterName string
 )
 
 func init() {
+	flag.StringVar(&networkID, "network-id", "", "STACKIT network id of loadbalancer NIC")
 	flag.StringVar(&projectID, "project-id", "", "STACKIT project id")
 	flag.StringVar(&clusterName, "cluster-name", "kubernetes", "Kubernetes cluster name")
 }
@@ -54,6 +56,7 @@ func run() error {
 	}
 	if err := (&reconciler{
 		projectID:   projectID,
+		networkID:   networkID,
 		clusterName: clusterName,
 	}).AddToManager(mgr); err != nil {
 		return err

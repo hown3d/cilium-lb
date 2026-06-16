@@ -118,13 +118,7 @@ func (r *reconciler) nodePredicate() predicate.TypedPredicate[*corev1.Node] {
 
 func servicePredicate(subPrediacte predicate.Predicate) predicate.Funcs {
 	checkService := func(svc *corev1.Service) bool {
-		if ptr.Deref(svc.Spec.LoadBalancerClass, "") != LoadBalancerClass {
-			return false
-		}
-		if _, ok := svc.Labels["cilium.lbaas/network"]; !ok {
-			return false
-		}
-		return true
+		return ptr.Deref(svc.Spec.LoadBalancerClass, "") == LoadBalancerClass
 	}
 
 	return predicate.Funcs{
@@ -181,7 +175,7 @@ func (r *reconciler) nodeMapFunc(shouldEnqueueServiceFunc func(svc *corev1.Servi
 		selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{
 			MatchExpressions: []metav1.LabelSelectorRequirement{
 				{
-					Key:      "cilium.lbaas/network",
+					Key:      InternalServiceLabel,
 					Operator: metav1.LabelSelectorOpExists,
 				},
 			},

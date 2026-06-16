@@ -19,6 +19,7 @@ type reconciler struct {
 	c           client.Client
 	iaasClient  *iaas.APIClient
 	projectID   string
+	networkID   string
 	region      string
 	clusterName string
 }
@@ -36,20 +37,15 @@ func (r *reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 
-	network, ok := svc.Labels["cilium.lbaas/network"]
-	if !ok {
-		return reconcile.Result{}, nil
-	}
-
 	if svc.DeletionTimestamp != nil {
-		return r.delete(ctx, svc, network)
+		return r.delete(ctx, svc)
 	}
 
 	if err := r.ensureFinalizer(ctx, svc); err != nil {
 		return reconcile.Result{}, err
 	}
 
-	return r.ensure(ctx, svc, network)
+	return r.ensure(ctx, svc)
 }
 
 const (

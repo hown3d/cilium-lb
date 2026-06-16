@@ -1,6 +1,6 @@
 module github.com/hown3d/cilium-lb
 
-go 1.25.3
+go 1.26
 
 require (
 	github.com/cilium/cilium v1.18.6

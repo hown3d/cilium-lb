@@ -19,11 +19,13 @@ externalIPs:
 hubble:
   relay:
     enabled: true
-bpf:
-  masquerade: true
 
 
 loadBalancer:
+  # while the loadbalancer NIC can be toggled to run with lower MTU to support XDP, we still want to use jumbo frames for the pod network NIC
+  # TODO: XDP is currently not working with pods being on other nodes than the one advertising the virtual IP.
+  # Need to investigate why traffic is dropped
+  # acceleration: best-effort
   algorithm: maglev
   mode: dsr
   dsrDispatch: geneve
@@ -31,6 +33,8 @@ tunnelProtocol: geneve
 
 bpf:
   lbModeAnnotation: true
+  enableTCX: true
+  masquerade: true
 
 nodePort:
   directRoutingDevice: enp7s0

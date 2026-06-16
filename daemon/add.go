@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	cilium_api_v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -46,6 +47,14 @@ func (r *ruleReconciler) AddToManager(mgr manager.Manager) error {
 func (r *routeReconciler) AddToManager(mgr manager.Manager) error {
 	if r.c == nil {
 		r.c = mgr.GetClient()
+	}
+
+	if r.iaasClient == nil {
+		iaasClient, err := iaas.NewAPIClient()
+		if err != nil {
+			return err
+		}
+		r.iaasClient = iaasClient
 	}
 
 	routeSourceChan := make(chan event.TypedGenericEvent[*cilium_api_v2alpha1.CiliumL2AnnouncementPolicy])

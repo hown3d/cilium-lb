@@ -16,7 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func (r *reconciler) delete(ctx context.Context, svc *corev1.Service, network string) (reconcile.Result, error) {
+func (r *reconciler) delete(ctx context.Context, svc *corev1.Service) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
 
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
@@ -39,12 +39,12 @@ func (r *reconciler) delete(ctx context.Context, svc *corev1.Service, network st
 		// }
 
 		log.V(1).Info("deleting port")
-		if err := r.deletePort(ctx, svc, network); err != nil {
+		if err := r.deletePort(ctx, svc); err != nil {
 			return reconcile.Result{}, fmt.Errorf("deleting port: %w", err)
 		}
 
 		log.V(1).Info("deleting allowed address")
-		if err := r.deleteAllowedAddresses(ctx, network, addr); err != nil {
+		if err := r.deleteAllowedAddresses(ctx, addr); err != nil {
 			return reconcile.Result{}, fmt.Errorf("deleting allowed address from nodes: %w", err)
 		}
 
@@ -61,14 +61,14 @@ func (r *reconciler) delete(ctx context.Context, svc *corev1.Service, network st
 	return reconcile.Result{}, r.dropFinalizer(ctx, svc)
 }
 
-func (r *reconciler) deletePort(ctx context.Context, svc *corev1.Service, network string) error {
+func (r *reconciler) deletePort(ctx context.Context, svc *corev1.Service) error {
 	ls := defaultLabels(svc, r.clusterName)
-	nics, err := r.iaasClient.ListNics(ctx, r.projectID, r.region, network).LabelSelector(ls.String()).Execute()
+	nics, err := r.iaasClient.ListNics(ctx, r.projectID, r.region, r.networkID).LabelSelector(ls.String()).Execute()
 	if err != nil {
 		return err
 	}
 	for _, nic := range nics.GetItems() {
-		if err := r.iaasClient.DeleteNicExecute(ctx, r.projectID, r.region, network, nic.GetId()); err != nil {
+		if err := r.iaasClient.DeleteNicExecute(ctx, r.projectID, r.region, r.networkID, nic.GetId()); err != nil {
 			return err
 		}
 	}
@@ -89,7 +89,7 @@ func (r *reconciler) deletePublicIP(ctx context.Context, svc *corev1.Service) er
 	return nil
 }
 
-func (r *reconciler) deleteAllowedAddresses(ctx context.Context, network string, ip netip.Addr) error {
+func (r *reconciler) deleteAllowedAddresses(ctx context.Context, ip netip.Addr) error {
 	nodes, err := r.l2AnnouncementNodes(ctx)
 	if err != nil {
 		return err
@@ -97,13 +97,13 @@ func (r *reconciler) deleteAllowedAddresses(ctx context.Context, network string,
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, node := range nodes {
 		g.Go(func() error {
-			return r.deleteAllowedAddressOnNode(gCtx, &node, network, ip)
+			return r.deleteAllowedAddressOnNode(gCtx, &node, ip)
 		})
 	}
 	return g.Wait()
 }
 
-func (r *reconciler) deleteAllowedAddressOnNode(ctx context.Context, node *corev1.Node, network string, ip netip.Addr) error {
+func (r *reconciler) deleteAllowedAddressOnNode(ctx context.Context, node *corev1.Node, ip netip.Addr) error {
 	log := logf.FromContext(ctx).WithValues("node", client.ObjectKeyFromObject(node), "ip", ip)
 	id := serverIDFromNode(node)
 	if id == "" {
@@ -116,7 +116,7 @@ func (r *reconciler) deleteAllowedAddressOnNode(ctx context.Context, node *corev
 		return err
 	}
 	for _, nic := range resp.GetItems() {
-		if nic.GetNetworkId() != network {
+		if nic.GetNetworkId() != r.networkID {
 			log.V(1).Info("nic not from desired network, skipping", "nic", nic.GetId())
 			continue
 		}
@@ -137,7 +137,7 @@ func (r *reconciler) deleteAllowedAddressOnNode(ctx context.Context, node *corev
 		}
 
 		log.V(1).Info("deleting allowed address")
-		_, err := r.iaasClient.UpdateNic(ctx, r.projectID, r.region, network, nic.GetId()).UpdateNicPayload(iaas.UpdateNicPayload{
+		_, err := r.iaasClient.UpdateNic(ctx, r.projectID, r.region, r.networkID, nic.GetId()).UpdateNicPayload(iaas.UpdateNicPayload{
 			AllowedAddresses: ptr.To(slices.Delete(addresses, idx, idx+1)),
 		}).Execute()
 		if err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
 	"github.com/go-logr/logr"
+	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,7 +25,12 @@ import (
 )
 
 type routeReconciler struct {
-	c client.Client
+	NetworkID string
+	ProjectID string
+	Region    string
+
+	iaasClient *iaas.APIClient
+	c          client.Client
 }
 
 // Start implements [manager.Runnable].
@@ -67,7 +73,13 @@ func (r *routeReconciler) Reconcile(ctx context.Context, req reconcile.Request) 
 
 func (r *routeReconciler) ensure(ctx context.Context, iface string) error {
 	log := logf.FromContext(ctx)
-	rout := defaultRoute(iface)
+
+	gateway, err := r.getNetworkGateway(ctx)
+	if err != nil {
+		return fmt.Errorf("getting network gateway: %w", err)
+	}
+
+	rout := defaultRoute(iface, gateway)
 	log.V(1).Info("upserting route", "route", rout)
 
 	return route.Upsert(slog.New(logr.ToSlogHandler(log)), rout)
@@ -75,30 +87,45 @@ func (r *routeReconciler) ensure(ctx context.Context, iface string) error {
 
 func (r *routeReconciler) delete(ctx context.Context, iface string) error {
 	log := logf.FromContext(ctx)
-	rout := defaultRoute(iface)
+
+	gateway, err := r.getNetworkGateway(ctx)
+	if err != nil {
+		return fmt.Errorf("getting network gateway: %w", err)
+	}
+
+	rout := defaultRoute(iface, gateway)
 	log.V(1).Info("deleting route", "route", rout)
 
 	if err := route.Delete(rout); err != nil {
 		// Ignore ESRCH (no such process) and ENOENT (no such file or directory) errors,
 		// which indicate the route was already deleted
 		if !errors.Is(err, unix.ESRCH) && !errors.Is(err, unix.ENOENT) {
-			return fmt.Errorf("failed to delete route (%s): %w", rout, err)
+			return fmt.Errorf("failed to delete route (%+v): %w", rout, err)
 		}
 	}
 	return nil
 }
 
-func defaultRoute(iface string) route.Route {
+func (r *routeReconciler) getNetworkGateway(ctx context.Context) (netip.Addr, error) {
+	network, err := r.iaasClient.GetNetwork(ctx, r.ProjectID, r.Region, r.NetworkID).Execute()
+	if err != nil {
+		return netip.Addr{}, err
+	}
+	gateway := network.GetIpv4().Gateway.Get()
+	if gateway == nil {
+		return netip.Addr{}, fmt.Errorf("network %s has no gateway", r.NetworkID)
+	}
+	return netip.ParseAddr(*gateway)
+}
+
+func defaultRoute(iface string, gateway netip.Addr) route.Route {
 	all := net.IPNet{
 		IP:   net.IPv4zero,
 		Mask: net.CIDRMask(0, 32),
 	}
 
-	// TODO: get nexthop from iaas API
-	gateway := net.IP(netip.MustParseAddr("172.16.0.1").AsSlice())
-
 	return route.Route{
-		Nexthop: &gateway,
+		Nexthop: new(net.IP(gateway.AsSlice())),
 		Device:  iface,
 		Prefix:  all,
 		Table:   tableID,
