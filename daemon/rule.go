@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/utils/ptr"
@@ -101,7 +103,11 @@ func (r *ruleReconciler) modifyRule(ctx context.Context, ip net.IP, op operation
 		}
 	case operationDelete:
 		if err := route.DeleteRule(netlink.FAMILY_V4, rule); err != nil {
-			return fmt.Errorf("removing rule %s: %w", rule, err)
+			// Ignore ESRCH (no such process) and ENOENT (no such file or directory) errors,
+			// which indicate the rule was already deleted
+			if !errors.Is(err, unix.ESRCH) && !errors.Is(err, unix.ENOENT) {
+				return fmt.Errorf("removing rule %s: %w", rule, err)
+			}
 		}
 	default:
 		return fmt.Errorf("unknown operation: %s", op)
