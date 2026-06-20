@@ -41,13 +41,7 @@ func (r *reconciler) AddToManager(mgr manager.Manager) error {
 		r.iaasClient = iaasClient
 	}
 
-	svcPredicate := servicePredicate(
-		predicate.Or(
-			predicate.GenerationChangedPredicate{},
-			predicate.AnnotationChangedPredicate{},
-			predicate.LabelChangedPredicate{},
-		),
-	)
+	svcPredicate := servicePredicate()
 	return builder.
 		ControllerManagedBy(mgr).
 		Named("ports").
@@ -55,7 +49,7 @@ func (r *reconciler) AddToManager(mgr manager.Manager) error {
 			MaxConcurrentReconciles: 1,
 		}).
 		For(&corev1.Service{}, builder.WithPredicates(svcPredicate)).
-		Owns(&corev1.Service{}, builder.WithPredicates(servicePredicateIngressChanged())).
+		Owns(&corev1.Service{}, builder.WithPredicates(predicate.And(svcPredicate, servicePredicateIngressChanged()))).
 		WatchesRawSource(source.TypedKind(
 			mgr.GetCache(),
 			&corev1.Node{},
@@ -116,7 +110,7 @@ func (r *reconciler) nodePredicate() predicate.TypedPredicate[*corev1.Node] {
 	}
 }
 
-func servicePredicate(subPrediacte predicate.Predicate) predicate.Funcs {
+func servicePredicate() predicate.Funcs {
 	checkService := func(svc *corev1.Service) bool {
 		return ptr.Deref(svc.Spec.LoadBalancerClass, "") == LoadBalancerClass
 	}
@@ -127,7 +121,7 @@ func servicePredicate(subPrediacte predicate.Predicate) predicate.Funcs {
 			if !checkService(newSvc) {
 				return false
 			}
-			return subPrediacte.Update(e)
+			return true
 		},
 		GenericFunc: func(event.TypedGenericEvent[client.Object]) bool {
 			return false
