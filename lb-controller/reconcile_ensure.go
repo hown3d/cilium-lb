@@ -269,6 +269,9 @@ func (r *reconciler) createOrUpdateInternalService(ctx context.Context, external
 		internalSvc.Annotations = externalSvc.Annotations
 
 		internalSvc.Labels = externalSvc.Labels
+		if internalSvc.Labels == nil {
+			internalSvc.Labels = map[string]string{}
+		}
 		internalSvc.Labels[InternalServiceLabel] = "true"
 
 		internalSvc.Spec = externalSvc.Spec
