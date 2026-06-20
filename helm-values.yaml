@@ -23,9 +23,10 @@ hubble:
 
 loadBalancer:
   # while the loadbalancer NIC can be toggled to run with lower MTU to support XDP, we still want to use jumbo frames for the pod network NIC
-  # TODO: XDP is currently not working with pods being on other nodes than the one advertising the virtual IP.
+  # XDP is currently not working with pods being on other nodes than the one advertising the virtual IP.
   # Need to investigate why traffic is dropped
-  # acceleration: best-effort
+  # Result: Traffic was being dropped when the enp3s0 nic had a jumbo frame MTU so the XDP program was not able to attach thus dropping packets on redirect
+  acceleration: best-effort
   algorithm: maglev
   mode: dsr
   dsrDispatch: geneve
@@ -35,6 +36,3 @@ bpf:
   lbModeAnnotation: true
   enableTCX: true
   masquerade: true
-
-nodePort:
-  directRoutingDevice: enp7s0
