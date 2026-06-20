@@ -45,30 +45,30 @@ func (r *ruleReconciler) Reconcile(ctx context.Context, req reconcile.Request) (
 	log.V(1).Info("reconcile")
 
 	if svc.DeletionTimestamp != nil {
-		return r.delete(svc)
+		return r.delete(ctx, svc)
 	}
 
-	return r.ensure(svc)
+	return r.ensure(ctx, svc)
 }
 
-func (r *ruleReconciler) ensure(svc *corev1.Service) (reconcile.Result, error) {
+func (r *ruleReconciler) ensure(ctx context.Context, svc *corev1.Service) (reconcile.Result, error) {
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.IP == "" {
 			continue
 		}
-		if err := r.modifyRule(net.ParseIP(ing.IP), operationCreate); err != nil {
+		if err := r.modifyRule(ctx, net.ParseIP(ing.IP), operationCreate); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
 	return reconcile.Result{}, nil
 }
 
-func (r *ruleReconciler) delete(svc *corev1.Service) (reconcile.Result, error) {
+func (r *ruleReconciler) delete(ctx context.Context, svc *corev1.Service) (reconcile.Result, error) {
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.IP == "" {
 			continue
 		}
-		if err := r.modifyRule(net.ParseIP(ing.IP), operationDelete); err != nil {
+		if err := r.modifyRule(ctx, net.ParseIP(ing.IP), operationDelete); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -82,7 +82,8 @@ const (
 	operationDelete operation = "delete"
 )
 
-func (r *ruleReconciler) modifyRule(ip net.IP, op operation) error {
+func (r *ruleReconciler) modifyRule(ctx context.Context, ip net.IP, op operation) error {
+	log := logf.FromContext(ctx)
 	rule := route.Rule{
 		From: &net.IPNet{
 			IP:   ip,
@@ -90,6 +91,8 @@ func (r *ruleReconciler) modifyRule(ip net.IP, op operation) error {
 		},
 		Table: tableID,
 	}
+
+	log.V(1).Info("modifyRule", "rule", rule, "op", op)
 	switch op {
 	case operationCreate:
 		// if already exists, noop
