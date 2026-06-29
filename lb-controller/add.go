@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hown3d/cilium-lb/pkg/l2policy"
+	"github.com/hown3d/cilium-lb/pkg/stackit"
 	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -34,7 +35,7 @@ func (r *reconciler) AddToManager(mgr manager.Manager) error {
 	}
 
 	if r.iaasClient == nil {
-		iaasClient, err := iaas.NewAPIClient()
+		iaasClient, err := iaas.NewAPIClient(stackit.ClientOptions()...)
 		if err != nil {
 			return err
 		}

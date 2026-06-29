@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	cilium_api_v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	"github.com/hown3d/cilium-lb/pkg/stackit"
 	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	corev1 "k8s.io/api/core/v1"
 )
@@ -50,7 +51,7 @@ func (r *routeReconciler) AddToManager(mgr manager.Manager) error {
 	}
 
 	if r.iaasClient == nil {
-		iaasClient, err := iaas.NewAPIClient()
+		iaasClient, err := iaas.NewAPIClient(stackit.ClientOptions()...)
 		if err != nil {
 			return err
 		}
