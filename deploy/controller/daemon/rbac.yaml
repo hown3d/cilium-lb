@@ -1,6 +1,9 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  annotations:
+    workload-identity.stackit.cloud/service-account-email: loadbalancer-daemon-2genaei8@sa.stackit.cloud
+    workload-identity.stackit.cloud/idp-token-endpoint: https://accounts.qa.stackit.cloud/oauth/v2/token
   name: lb-daemon
   namespace: cilium-lbaas
 ---

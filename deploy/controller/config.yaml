@@ -1,0 +1,12 @@
+# https://kubernetes.io/docs/concepts/configuration/configmap/
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lb-config
+data:
+  PROJECT_ID: 6c600839-6c5e-411a-957a-d5e6c405b0cf
+  NETWORK_ID: 9b46d0fd-5538-4855-8f92-0f5967709445
+  IAAS_API_URL: https://iaas.api.qa.stackit.cloud
+  STACKIT_TOKEN_BASEURL: https://service-account.api.qa.stackit.cloud/token
+---
+

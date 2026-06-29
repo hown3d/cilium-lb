@@ -32,7 +32,7 @@ build:
 manifests:
   kustomize:
     paths:
-      - lb-controller/deploy
-      - daemon/deploy
+      - deploy/controller
 deploy:
-  kubectl: {}
+  kubectl: 
+    defaultNamespace: cilium-lbaas

@@ -27,12 +27,15 @@ spec:
         env:
           - name: STACKIT_SERVICE_ACCOUNT_KEY_PATH
             value: /.stackit/serviceaccount.json
+        envFrom:
+          - configMapRef:
+              name: lb-config
         volumeMounts:
           - mountPath: /.stackit
             name: stackit-creds
         args:
-          - --project-id=f5debc67-cfeb-403a-9d92-36fdbe3325c7
-          - --network-id=832b848d-8673-4f78-a404-2f8d4c93eace
+          - --project-id=$(PROJECT_ID)
+          - --network-id=$(NETWORK_ID)
         securityContext:
           capabilities:
             add:
@@ -48,3 +51,4 @@ spec:
             items:
               - key: serviceaccount.json
                 path: serviceaccount.json
+            optional: true
