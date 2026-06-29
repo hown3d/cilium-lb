@@ -2,11 +2,12 @@
 set -eo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && /bin/pwd)"
+PLATFORM=amd64
 
 node=$1
 shift
 
-docker build -t ttl.sh/xdptools --platform=linux/amd64 --platform=linux/arm64 --push $DIR
+docker build -t ttl.sh/xdptools --platform=linux/${PLATFORM} --push $DIR
 
 cat <<EOF >/tmp/profile.yaml
 securityContext:
