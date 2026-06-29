@@ -158,7 +158,7 @@ func servicePredicateIngressChanged() predicate.Funcs {
 			return false
 		},
 		CreateFunc: func(e event.TypedCreateEvent[client.Object]) bool {
-			return false
+			return true
 		},
 	}
 }

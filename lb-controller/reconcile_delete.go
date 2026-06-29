@@ -18,6 +18,10 @@ import (
 
 func (r *reconciler) delete(ctx context.Context, svc *corev1.Service) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
+	nodes, err := r.l2AnnouncementNodes(ctx)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	for _, ing := range svc.Status.LoadBalancer.Ingress {
 		if ing.IP == "" {
@@ -41,6 +45,11 @@ func (r *reconciler) delete(ctx context.Context, svc *corev1.Service) (reconcile
 		log.V(1).Info("deleting port")
 		if err := r.deletePort(ctx, svc); err != nil {
 			return reconcile.Result{}, fmt.Errorf("deleting port: %w", err)
+		}
+
+		log.V(1).Info("deleting security group")
+		if err := r.deleteSecurityGroup(ctx, svc, nodes); err != nil {
+			return reconcile.Result{}, fmt.Errorf("deleting security group: %w", err)
 		}
 
 		log.V(1).Info("deleting allowed address")
@@ -70,6 +79,60 @@ func (r *reconciler) deletePort(ctx context.Context, svc *corev1.Service) error 
 	for _, nic := range nics.GetItems() {
 		if err := r.iaasClient.DeleteNicExecute(ctx, r.projectID, r.region, r.networkID, nic.GetId()); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (r *reconciler) deleteSecurityGroup(ctx context.Context, svc *corev1.Service, nodes []corev1.Node) error {
+	log := logf.FromContext(ctx)
+
+	ls := defaultLabels(svc, r.clusterName)
+	resp, err := r.iaasClient.ListSecurityGroups(ctx, r.projectID, r.region).LabelSelector(ls.String()).Execute()
+	if err != nil {
+		return err
+	}
+
+	for _, secGroup := range resp.GetItems() {
+		log.V(1).Info("detaching security group", "security-group", secGroup.GetId())
+		if err := r.detachSecurityGroup(ctx, nodes, secGroup.GetId()); err != nil {
+			return fmt.Errorf("detaching security group from node: %s", err)
+		}
+		if err := r.iaasClient.DeleteSecurityGroupExecute(ctx, r.projectID, r.region, secGroup.GetId()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *reconciler) detachSecurityGroup(ctx context.Context, nodes []corev1.Node, secGroupID string) error {
+	log := logf.FromContext(ctx)
+	for _, node := range nodes {
+		nics, err := r.getNodeNics(ctx, &node)
+		if err != nil {
+			return err
+		}
+		for _, nic := range nics {
+			if nic.GetNetworkId() != r.networkID {
+				log.V(1).Info("nic not from desired network, skipping", "nic", nic.GetId())
+				continue
+			}
+			currentSecGroups := nic.GetSecurityGroups()
+
+			if slices.Contains(currentSecGroups, secGroupID) {
+				secGroupIds := slices.DeleteFunc(currentSecGroups, func(secGroup string) bool {
+					return secGroup == secGroupID
+				})
+				payload := iaas.UpdateNicPayload{
+					SecurityGroups: &secGroupIds,
+				}
+				_, err := r.iaasClient.UpdateNic(ctx, r.projectID, r.region, r.networkID, nic.GetId()).
+					UpdateNicPayload(payload).
+					Execute()
+				if err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil

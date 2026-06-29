@@ -52,7 +52,8 @@ Key Cilium settings:
 - [x] Geneve DSR implementation
 - [x] Cleanup resources on delete
 - [x] STACKIT infrastructure integration
-- [ ] Security groups (in progress)
+- [x] Security groups
+- [ ] find a way to remove the default route for north-south NIC
 - [ ] remove lock if node has ToBeDeletedByAutoscaler Taint
   - WIP: <https://github.com/hown3d/cilium/commit/71e93043af34e2fd23732a0088e733b8513eff39>
   - Is Coordinated Leader election possible? <https://github.com/kubernetes/enhancements/blob/master/keps/sig-api-machinery/4355-coordinated-leader-election/README.md>

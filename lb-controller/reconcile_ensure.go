@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net/netip"
 	"slices"
+	"strings"
 
 	cilium_api_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	cilium_api_v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
@@ -15,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -32,8 +34,12 @@ func (r *reconciler) ensure(ctx context.Context, svc *corev1.Service) (reconcile
 		return reconcile.Result{}, fmt.Errorf("creating internal loadbalancer service: %w", err)
 	}
 
+	nodes, err := r.l2AnnouncementNodes(ctx)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("getting node selector from l2 announcements: %w", err)
+	}
+
 	ingressMap := map[netip.Addr]corev1.LoadBalancerIngress{}
-	log.V(1).Info("checking loadbalancer ingresses", "ingresses", internalSvc.Status.LoadBalancer.Ingress)
 	for _, ing := range internalSvc.Status.LoadBalancer.Ingress {
 		if ing.IP == "" {
 			continue
@@ -52,8 +58,14 @@ func (r *reconciler) ensure(ctx context.Context, svc *corev1.Service) (reconcile
 			return reconcile.Result{}, fmt.Errorf("ensuring port: %w", err)
 		}
 
+		log.V(1).Info("ensuring security group")
+		err = r.ensureSecurityGroup(ctx, svc, nodes)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("ensuring security group: %w", err)
+		}
+
 		log.V(1).Info("ensuring allowed addresses")
-		if err := r.ensureAllowedAddresses(ctx, addr); err != nil {
+		if err := r.ensureAllowedAddresses(ctx, nodes, addr); err != nil {
 			return reconcile.Result{}, fmt.Errorf("adding allowed address to nodes: %w", err)
 		}
 
@@ -86,12 +98,181 @@ func (r *reconciler) ensure(ctx context.Context, svc *corev1.Service) (reconcile
 	return reconcile.Result{}, nil
 }
 
-func (r *reconciler) ensureAllowedAddresses(ctx context.Context, ip netip.Addr) error {
-	log := logf.FromContext(ctx)
-	nodes, err := r.l2AnnouncementNodes(ctx)
+func (r *reconciler) ensureSecurityGroup(ctx context.Context, svc *corev1.Service, nodes []corev1.Node) error {
+	ls := defaultLabels(svc, r.clusterName)
+	resp, err := r.iaasClient.ListSecurityGroups(ctx, r.projectID, r.region).LabelSelector(ls.String()).Execute()
 	if err != nil {
-		return fmt.Errorf("getting node selector from l2 announcements: %w", err)
+		return err
 	}
+	secGroups := resp.GetItems()
+	var secGroup *iaas.SecurityGroup
+	if len(secGroups) == 0 {
+		payload := iaas.CreateSecurityGroupPayload{
+			Labels:   iaas.CreateSecurityGroupPayloadGetLabelsAttributeType(&ls),
+			Stateful: new(false),
+			Name:     new(identifierFromSvc(svc)),
+		}
+		secGroup, err = r.iaasClient.CreateSecurityGroup(ctx, r.projectID, r.region).CreateSecurityGroupPayload(payload).Execute()
+		if err != nil {
+			return err
+		}
+	} else {
+		secGroup = &secGroups[0]
+	}
+	if err := r.ensureSecurityGroupRules(ctx, svc, secGroup.GetId()); err != nil {
+		return fmt.Errorf("ensuring security group rules: %w", err)
+	}
+
+	if err := r.attachSecurityGroupToNodes(ctx, nodes, secGroup.GetId()); err != nil {
+		return fmt.Errorf("attaching security group to nodes: %w", err)
+	}
+
+	return nil
+}
+
+func (r *reconciler) attachSecurityGroupToNodes(ctx context.Context, nodes []corev1.Node, secGroupID string) error {
+	log := logf.FromContext(ctx)
+
+	g, gCtx := errgroup.WithContext(ctx)
+	for _, node := range nodes {
+		log.V(1).Info("ensuring security group id on node", "node", client.ObjectKeyFromObject(&node), "security-group", secGroupID)
+		g.Go(func() error {
+			return r.attachSecurityGroupToNode(gCtx, &node, secGroupID)
+		})
+	}
+
+	return g.Wait()
+}
+
+func (r *reconciler) attachSecurityGroupToNode(ctx context.Context, node *corev1.Node, secGroupID string) error {
+	log := logf.FromContext(ctx)
+	nics, err := r.getNodeNics(ctx, node)
+	if err != nil {
+		return err
+	}
+	for _, nic := range nics {
+		if nic.GetNetworkId() != r.networkID {
+			log.V(1).Info("nic not from desired network, skipping", "nic", nic.GetId())
+			continue
+		}
+		currentSecGroups := nic.GetSecurityGroups()
+		secGroupIds := append([]string(currentSecGroups), secGroupID)
+		if !slices.Contains(currentSecGroups, secGroupID) {
+			payload := iaas.UpdateNicPayload{
+				SecurityGroups: &secGroupIds,
+			}
+			_, err := r.iaasClient.UpdateNic(ctx, r.projectID, r.region, r.networkID, nic.GetId()).
+				UpdateNicPayload(payload).
+				Execute()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (r *reconciler) ensureSecurityGroupRules(ctx context.Context, svc *corev1.Service, secGroupID string) error {
+	log := logf.FromContext(ctx)
+
+	currentRules := map[securityGroupRule]string{}
+	ruleResp, err := r.iaasClient.ListSecurityGroupRules(ctx, r.projectID, r.region, secGroupID).Execute()
+	if err != nil {
+		return err
+	}
+
+	for _, rule := range ruleResp.GetItems() {
+		secGroupRule := securityGroupRule{
+			Ethertype: rule.GetEthertype(),
+			Direction: rule.GetDirection(),
+		}
+		if rule.PortRange != nil {
+			secGroupRule.Port = int(*(ptr.Deref(rule.PortRange, iaas.PortRange{}).Min))
+		}
+		if rule.GetProtocol().Name != nil {
+			secGroupRule.Proto = *rule.GetProtocol().Name
+		}
+		currentRules[secGroupRule] = rule.GetId()
+	}
+	currentRuleSet := sets.KeySet(currentRules)
+	desiredRuleSet := sets.New(securityGroupRulesFromSvc(svc)...)
+	missingRules := desiredRuleSet.Difference(currentRuleSet).UnsortedList()
+
+	for _, rule := range missingRules {
+		log.V(1).Info("creating missing securityGroupRule", "rule", rule, "security-group", secGroupID)
+		payload := rule.ToPayload()
+		_, err := r.iaasClient.CreateSecurityGroupRule(ctx, r.projectID, r.region, secGroupID).
+			CreateSecurityGroupRulePayload(payload).
+			Execute()
+		if err != nil {
+			return err
+		}
+	}
+
+	obsoleteRules := currentRuleSet.Difference(desiredRuleSet).UnsortedList()
+	for _, rule := range obsoleteRules {
+		id, ok := currentRules[rule]
+		if !ok {
+			continue
+		}
+		log.V(1).Info("deleting obsolete securityGroupRule", "rule", rule, "security-group", secGroupID)
+		if err := r.iaasClient.DeleteSecurityGroupRule(ctx, r.projectID, r.region, secGroupID, id).Execute(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+type securityGroupRule struct {
+	Ethertype string
+	Proto     string
+	Port      int
+	Direction string
+}
+
+func (r securityGroupRule) ToPayload() iaas.CreateSecurityGroupRulePayload {
+	payload := iaas.CreateSecurityGroupRulePayload{
+		Ethertype: &r.Ethertype,
+		Direction: &r.Direction,
+	}
+	if r.Proto != "" {
+		payload.Protocol = &iaas.CreateProtocol{
+			String: &r.Proto,
+		}
+	}
+	if r.Port != 0 {
+		payload.PortRange = iaas.NewPortRange(iaas.PortRangeGetMaxArgType(r.Port), iaas.PortRangeGetMinArgType(r.Port))
+	}
+	return payload
+}
+
+func (r securityGroupRule) String() string {
+	return fmt.Sprintf("%s port=%s proto=%d direction=%s", r.Ethertype, r.Proto, r.Port, r.Direction)
+}
+
+func securityGroupRulesFromSvc(svc *corev1.Service) []securityGroupRule {
+	rules := make([]securityGroupRule, 0, len(svc.Spec.Ports)*len(svc.Spec.IPFamilies))
+	for _, ipFamily := range svc.Spec.IPFamilies {
+		for _, port := range svc.Spec.Ports {
+			rules = append(rules, securityGroupRule{
+				Ethertype: string(ipFamily),
+				Proto:     strings.ToLower(string(port.Protocol)),
+				Port:      int(port.Port),
+				Direction: "ingress",
+			})
+		}
+
+		rules = append(rules, securityGroupRule{
+			Ethertype: string(ipFamily),
+			Direction: "egress",
+		})
+	}
+	return rules
+}
+
+func (r *reconciler) ensureAllowedAddresses(ctx context.Context, nodes []corev1.Node, ip netip.Addr) error {
+	log := logf.FromContext(ctx)
 
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, node := range nodes {
@@ -106,17 +287,11 @@ func (r *reconciler) ensureAllowedAddresses(ctx context.Context, ip netip.Addr) 
 
 func (r *reconciler) ensureAllowedAddressOnNode(ctx context.Context, node *corev1.Node, ip netip.Addr) error {
 	log := logf.FromContext(ctx).WithValues("node", client.ObjectKeyFromObject(node), "ip", ip)
-	id := serverIDFromNode(node)
-	if id == "" {
-		log.Info("node has no stackit provider ID, skipping")
-		return nil
-	}
-
-	resp, err := r.iaasClient.ListServerNICsExecute(ctx, r.projectID, r.region, id)
+	nics, err := r.getNodeNics(ctx, node)
 	if err != nil {
 		return err
 	}
-	for _, nic := range resp.GetItems() {
+	for _, nic := range nics {
 		if nic.GetNetworkId() != r.networkID {
 			log.V(1).Info("nic not from desired network, skipping", "nic", nic.GetId())
 			continue
@@ -231,7 +406,13 @@ func (r *reconciler) ensurePublicIP(ctx context.Context, svc *corev1.Service, ni
 		if err != nil {
 			return netip.Addr{}, err
 		}
-		return netip.ParseAddr(newPubIP.GetIp())
+		ip, err := netip.ParseAddr(newPubIP.GetIp())
+		if err != nil {
+			return netip.Addr{}, err
+		}
+		log.V(1).Info("public ip exists", "ip", ip)
+		return ip, nil
+
 	}
 
 	log.V(1).Info("public ip not found, creating")
@@ -292,4 +473,19 @@ func (r *reconciler) createOrUpdateInternalService(ctx context.Context, external
 		logf.FromContext(ctx).Info("internal service mutation", "operation", res)
 	}
 	return internalSvc, nil
+}
+
+func (r *reconciler) getNodeNics(ctx context.Context, node *corev1.Node) ([]iaas.NIC, error) {
+	log := logf.FromContext(ctx).WithValues("node", client.ObjectKeyFromObject(node))
+	id := serverIDFromNode(node)
+	if id == "" {
+		log.Info("node has no stackit provider ID, skipping")
+		return []iaas.NIC{}, nil
+	}
+
+	resp, err := r.iaasClient.ListServerNICsExecute(ctx, r.projectID, r.region, id)
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetItems(), nil
 }
