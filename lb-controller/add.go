@@ -50,7 +50,7 @@ func (r *reconciler) AddToManager(mgr manager.Manager) error {
 			MaxConcurrentReconciles: 1,
 		}).
 		For(&corev1.Service{}, builder.WithPredicates(svcPredicate)).
-		Owns(&corev1.Service{}, builder.WithPredicates(predicate.And(svcPredicate, servicePredicateIngressChanged()))).
+		Owns(&corev1.Service{}, builder.WithPredicates(servicePredicateIngressChanged())).
 		WatchesRawSource(source.TypedKind(
 			mgr.GetCache(),
 			&corev1.Node{},
