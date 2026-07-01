@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"slices"
 
+	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
@@ -23,51 +24,61 @@ func (r *reconciler) delete(ctx context.Context, svc *corev1.Service) (reconcile
 		return reconcile.Result{}, err
 	}
 
-	for _, ing := range svc.Status.LoadBalancer.Ingress {
-		if ing.IP == "" {
-			continue
-		}
+	nic, err := r.getPort(ctx, defaultLabels(svc, r.clusterName))
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	nicVIP, err := netip.ParseAddr(nic.GetIpv4())
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
-		addr, err := netip.ParseAddr(ing.IP)
-		if err != nil {
-			log.Error(err, "parsing ingress IP")
-			continue
-		}
-
-		// exists, err := isPublicIPOfIPPool(ctx, r.c, svc, addr)
-		// if err != nil {
-		// 	return reconcile.Result{}, err
-		// }
-		// if exists {
-		// 	continue
-		// }
-
-		log.V(1).Info("deleting port")
-		if err := r.deletePort(ctx, svc); err != nil {
-			return reconcile.Result{}, fmt.Errorf("deleting port: %w", err)
-		}
-
-		log.V(1).Info("deleting security group")
-		if err := r.deleteSecurityGroup(ctx, svc, nodes); err != nil {
-			return reconcile.Result{}, fmt.Errorf("deleting security group: %w", err)
-		}
-
-		log.V(1).Info("deleting allowed address")
-		if err := r.deleteAllowedAddresses(ctx, addr); err != nil {
-			return reconcile.Result{}, fmt.Errorf("deleting allowed address from nodes: %w", err)
-		}
-
-		log.V(1).Info("deleting public ip")
-		if err := r.deletePublicIP(ctx, svc); err != nil {
-			return reconcile.Result{}, err
+	if nic != nil {
+		if err := r.removeVIPFromCiliumIPPool(ctx, nicVIP); err != nil {
+			return reconcile.Result{}, fmt.Errorf("removing vip from cilium loadbalancer ip pool: %w", err)
 		}
 	}
 
-	// if err := r.c.Delete(ctx, publicIPPoolForSvc(svc)); err != nil {
-	// 	return reconcile.Result{}, fmt.Errorf("deleting cilium IP pool with publicIP: %w", err)
-	// }
+	log.V(1).Info("deleting security group")
+	if err := r.deleteSecurityGroup(ctx, svc, nodes); err != nil {
+		return reconcile.Result{}, fmt.Errorf("deleting security group: %w", err)
+	}
+
+	log.V(1).Info("deleting allowed address")
+	if err := r.deleteAllowedAddresses(ctx, nicVIP); err != nil {
+		return reconcile.Result{}, fmt.Errorf("deleting allowed address from nodes: %w", err)
+	}
+
+	log.V(1).Info("deleting port")
+	if err := r.deletePort(ctx, svc); err != nil {
+		return reconcile.Result{}, fmt.Errorf("deleting port: %w", err)
+	}
+
+	log.V(1).Info("deleting public ip")
+	if err := r.deletePublicIP(ctx, svc); err != nil {
+		return reconcile.Result{}, err
+	}
 
 	return reconcile.Result{}, r.dropFinalizer(ctx, svc)
+}
+
+func (r *reconciler) removeVIPFromCiliumIPPool(ctx context.Context, vip netip.Addr) error {
+	ippool := ciliumIPPool()
+	if err := r.c.Get(ctx, client.ObjectKeyFromObject(ippool), ippool); err != nil {
+		return err
+	}
+	before := ippool.DeepCopy()
+	ippool.Spec.Blocks = slices.DeleteFunc(ippool.Spec.Blocks, func(block ciliumv2.CiliumLoadBalancerIPPoolIPBlock) bool {
+		cidr, err := netip.ParsePrefix(string(block.Cidr))
+		if err != nil {
+			return false
+		}
+		return cidr.Contains(vip)
+	})
+	if err := r.c.Patch(ctx, ippool, client.MergeFrom(before)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *reconciler) deletePort(ctx context.Context, svc *corev1.Service) error {

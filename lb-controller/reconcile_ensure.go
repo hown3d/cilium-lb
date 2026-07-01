@@ -10,6 +10,7 @@ import (
 
 	cilium_api_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	cilium_api_v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
+	v1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
 	"github.com/hown3d/cilium-lb/pkg/l2policy"
 	"github.com/stackitcloud/stackit-sdk-go/services/iaas"
 	"golang.org/x/sync/errgroup"
@@ -39,40 +40,44 @@ func (r *reconciler) ensure(ctx context.Context, svc *corev1.Service) (reconcile
 		return reconcile.Result{}, fmt.Errorf("getting node selector from l2 announcements: %w", err)
 	}
 
+	log.V(1).Info("ensuring port")
+	nic, err := r.ensurePort(ctx, svc)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("ensuring port: %w", err)
+	}
+	nicVIP, err := netip.ParseAddr(nic.GetIpv4())
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	log = log.WithValues("ip", nicVIP)
+
+	if err := r.persistVIPInCiliumIPPool(ctx, nicVIP); err != nil {
+		return reconcile.Result{}, fmt.Errorf("ensuring vip in cilium ippool: %w ", err)
+	}
+
+	log.V(1).Info("ensuring public ip")
+	pubIP, err := r.ensurePublicIP(ctx, svc, nic.GetId())
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	log.V(1).Info("ensuring security group")
+	err = r.ensureSecurityGroup(ctx, svc, nodes)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("ensuring security group: %w", err)
+	}
+
+	log.V(1).Info("ensuring allowed addresses")
+	if err := r.ensureAllowedAddresses(ctx, nodes, nicVIP); err != nil {
+		return reconcile.Result{}, fmt.Errorf("adding allowed address to nodes: %w", err)
+	}
+
 	ingressMap := map[netip.Addr]corev1.LoadBalancerIngress{}
+
 	for _, ing := range internalSvc.Status.LoadBalancer.Ingress {
 		if ing.IP == "" {
 			continue
-		}
-
-		addr, err := netip.ParseAddr(ing.IP)
-		if err != nil {
-			log.Error(err, "parsing ingress IP")
-			continue
-		}
-		log := log.WithValues("ip", addr)
-
-		log.V(1).Info("ensuring port")
-		nicID, err := r.ensurePort(ctx, svc, addr)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("ensuring port: %w", err)
-		}
-
-		log.V(1).Info("ensuring security group")
-		err = r.ensureSecurityGroup(ctx, svc, nodes)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("ensuring security group: %w", err)
-		}
-
-		log.V(1).Info("ensuring allowed addresses")
-		if err := r.ensureAllowedAddresses(ctx, nodes, addr); err != nil {
-			return reconcile.Result{}, fmt.Errorf("adding allowed address to nodes: %w", err)
-		}
-
-		log.V(1).Info("ensuring public ip")
-		pubIP, err := r.ensurePublicIP(ctx, svc, nicID)
-		if err != nil {
-			return reconcile.Result{}, err
 		}
 
 		lbIngress := corev1.LoadBalancerIngress{
@@ -110,7 +115,7 @@ func (r *reconciler) ensureSecurityGroup(ctx context.Context, svc *corev1.Servic
 		payload := iaas.CreateSecurityGroupPayload{
 			Labels:   iaas.CreateSecurityGroupPayloadGetLabelsAttributeType(&ls),
 			Stateful: new(false),
-			Name:     new(identifierFromSvc(svc)),
+			Name:     new(identifierFromSvc(svc, r.clusterName)),
 		}
 		secGroup, err = r.iaasClient.CreateSecurityGroup(ctx, r.projectID, r.region).CreateSecurityGroupPayload(payload).Execute()
 		if err != nil {
@@ -155,11 +160,13 @@ func (r *reconciler) attachSecurityGroupToNode(ctx context.Context, node *corev1
 			log.V(1).Info("nic not from desired network, skipping", "nic", nic.GetId())
 			continue
 		}
-		currentSecGroups := nic.GetSecurityGroups()
-		secGroupIds := append([]string(currentSecGroups), secGroupID)
-		if !slices.Contains(currentSecGroups, secGroupID) {
+		statelessSecGroups, err := r.getStatelessSecurityGroup(ctx, nic.GetSecurityGroups())
+		if err != nil {
+			return err
+		}
+		if !slices.Contains(statelessSecGroups, secGroupID) {
 			payload := iaas.UpdateNicPayload{
-				SecurityGroups: &secGroupIds,
+				SecurityGroups: new(append(statelessSecGroups, secGroupID)),
 			}
 			_, err := r.iaasClient.UpdateNic(ctx, r.projectID, r.region, r.networkID, nic.GetId()).
 				UpdateNicPayload(payload).
@@ -170,6 +177,20 @@ func (r *reconciler) attachSecurityGroupToNode(ctx context.Context, node *corev1
 		}
 	}
 	return nil
+}
+
+func (r *reconciler) getStatelessSecurityGroup(ctx context.Context, securityGroupIDs []string) ([]string, error) {
+	var statelessSecGroups []string
+	for _, id := range securityGroupIDs {
+		secGroup, err := r.iaasClient.GetSecurityGroup(ctx, r.projectID, r.region, id).Execute()
+		if err != nil {
+			return nil, err
+		}
+		if !secGroup.GetStateful() {
+			statelessSecGroups = append(statelessSecGroups, id)
+		}
+	}
+	return statelessSecGroups, nil
 }
 
 func (r *reconciler) ensureSecurityGroupRules(ctx context.Context, svc *corev1.Service, secGroupID string) error {
@@ -198,17 +219,7 @@ func (r *reconciler) ensureSecurityGroupRules(ctx context.Context, svc *corev1.S
 	desiredRuleSet := sets.New(securityGroupRulesFromSvc(svc)...)
 	missingRules := desiredRuleSet.Difference(currentRuleSet).UnsortedList()
 
-	for _, rule := range missingRules {
-		log.V(1).Info("creating missing securityGroupRule", "rule", rule, "security-group", secGroupID)
-		payload := rule.ToPayload()
-		_, err := r.iaasClient.CreateSecurityGroupRule(ctx, r.projectID, r.region, secGroupID).
-			CreateSecurityGroupRulePayload(payload).
-			Execute()
-		if err != nil {
-			return err
-		}
-	}
-
+	// make sure to delete the obsoleteRules as they could contain stateful rules
 	obsoleteRules := currentRuleSet.Difference(desiredRuleSet).UnsortedList()
 	for _, rule := range obsoleteRules {
 		id, ok := currentRules[rule]
@@ -217,6 +228,17 @@ func (r *reconciler) ensureSecurityGroupRules(ctx context.Context, svc *corev1.S
 		}
 		log.V(1).Info("deleting obsolete securityGroupRule", "rule", rule, "security-group", secGroupID)
 		if err := r.iaasClient.DeleteSecurityGroupRule(ctx, r.projectID, r.region, secGroupID, id).Execute(); err != nil {
+			return err
+		}
+	}
+
+	for _, rule := range missingRules {
+		log.V(1).Info("creating missing securityGroupRule", "rule", rule, "security-group", secGroupID)
+		payload := rule.ToPayload()
+		_, err := r.iaasClient.CreateSecurityGroupRule(ctx, r.projectID, r.region, secGroupID).
+			CreateSecurityGroupRulePayload(payload).
+			Execute()
+		if err != nil {
 			return err
 		}
 	}
@@ -336,46 +358,87 @@ func (r *reconciler) l2AnnouncementNodes(ctx context.Context) ([]corev1.Node, er
 	return nodes.Items, nil
 }
 
-func publicIPPoolForSvc(svc *corev1.Service) *cilium_api_v2.CiliumLoadBalancerIPPool {
+func ciliumIPPool() *cilium_api_v2.CiliumLoadBalancerIPPool {
 	return &cilium_api_v2.CiliumLoadBalancerIPPool{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: identifierFromSvc(svc),
+			Name: "loadbalancer",
 		},
 	}
 }
 
-func (r *reconciler) ensurePort(ctx context.Context, svc *corev1.Service, ip netip.Addr) (string, error) {
+func (r *reconciler) persistVIPInCiliumIPPool(ctx context.Context, vip netip.Addr) error {
+	ippool := ciliumIPPool()
+	res, err := controllerutil.CreateOrUpdate(ctx, r.c, ippool, func() error {
+		ippool.Spec.ServiceSelector = &v1.LabelSelector{
+			MatchExpressions: []v1.LabelSelectorRequirement{
+				{
+					Key:      InternalServiceLabel,
+					Operator: v1.LabelSelectorOpExists,
+				},
+			},
+		}
+
+		var ipFound bool
+		for _, block := range ippool.Spec.Blocks {
+			cidr, err := netip.ParsePrefix(string(block.Cidr))
+			if err != nil {
+				return err
+			}
+			if cidr.Contains(vip) {
+				ipFound = true
+			}
+		}
+		if ipFound {
+			return nil
+		}
+		ippool.Spec.Blocks = append(ippool.Spec.Blocks, cilium_api_v2.CiliumLoadBalancerIPPoolIPBlock{
+			Cidr: cilium_api_v2.IPv4orIPv6CIDR(netip.PrefixFrom(vip, 32).String()),
+		})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if res != controllerutil.OperationResultNone {
+		logf.FromContext(ctx).Info("cilium loadbalancer ippool mutation", "operation", res)
+	}
+	return nil
+}
+
+func (r *reconciler) ensurePort(ctx context.Context, svc *corev1.Service) (*iaas.NIC, error) {
 	ls := defaultLabels(svc, r.clusterName)
+
+	foundNic, err := r.getPort(ctx, ls)
+	if err != nil {
+		return nil, err
+	}
+	if foundNic != nil {
+		return foundNic, nil
+	}
+
+	nic, err := r.createPort(ctx, identifierFromSvc(svc, r.clusterName), ls)
+	if err != nil {
+		return nil, err
+	}
+	return nic, nil
+}
+
+func (r *reconciler) getPort(ctx context.Context, ls Labels) (*iaas.NIC, error) {
 	nics, err := r.iaasClient.ListNics(ctx, r.projectID, r.region, r.networkID).LabelSelector(ls.String()).Execute()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var foundNic *iaas.NIC
-	for _, nic := range nics.GetItems() {
-		if nic.GetIpv4() == ip.String() {
-			foundNic = &nic
-			continue
-		}
-		// nic has our identifier but is not the correct ip
-		if err := r.iaasClient.DeleteNicExecute(ctx, r.projectID, r.region, r.networkID, nic.GetId()); err != nil {
-			return "", err
-		}
+	if len(nics.GetItems()) > 0 {
+		foundNic = &nics.GetItems()[0]
 	}
-	if foundNic != nil {
-		return foundNic.GetId(), nil
-	}
-	nic, err := r.createPort(ctx, ip, identifierFromSvc(svc), ls)
-	if err != nil {
-		return "", err
-	}
-	return nic.GetId(), nil
+	return foundNic, nil
 }
 
-func (r *reconciler) createPort(ctx context.Context, ip netip.Addr, name string, labels Labels) (*iaas.NIC, error) {
+func (r *reconciler) createPort(ctx context.Context, name string, labels Labels) (*iaas.NIC, error) {
 	payload := iaas.CreateNicPayload{
 		Labels: iaas.CreateNicPayloadGetLabelsAttributeType(&labels),
-		Ipv4:   ptr.To(ip.String()),
 		Name:   &name,
 	}
 	return r.iaasClient.CreateNic(ctx, r.projectID, r.region, r.networkID).CreateNicPayload(payload).Execute()

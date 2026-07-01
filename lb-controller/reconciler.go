@@ -65,13 +65,13 @@ func (l Labels) String() string {
 
 func defaultLabels(svc *corev1.Service, clusterName string) Labels {
 	return Labels{
-		LabelIdentifier: identifierFromSvc(svc),
+		LabelIdentifier: identifierFromSvc(svc, clusterName),
 		LabelCluster:    clusterName,
 	}
 }
 
-func identifierFromSvc(svc *corev1.Service) string {
-	return fmt.Sprintf("%s.%s", svc.Namespace, svc.Name)
+func identifierFromSvc(svc *corev1.Service, clusterName string) string {
+	return fmt.Sprintf("%s.%s.%s", clusterName, svc.Namespace, svc.Name)
 }
 
 func serverIDFromNode(node *corev1.Node) string {
